@@ -1,17 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Patient } from '@/types/patient';
-import { db } from '@/integrations/firebase/client';
-import { 
-  collection, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
-  getDocs, 
-  query, 
-  orderBy,
-  Timestamp 
-} from 'firebase/firestore';
+import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './AuthContext';
 
 interface PatientContextType {
@@ -31,7 +20,7 @@ export function PatientProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
 
-  // Load patients from Firestore on mount
+  // Load patients from Supabase on mount
   useEffect(() => {
     if (user) {
       loadPatients();
@@ -43,17 +32,28 @@ export function PatientProvider({ children }: { children: ReactNode }) {
 
   const loadPatients = async () => {
     try {
-      const q = query(collection(db, 'patients'), orderBy('createdAt', 'desc'));
-      const snapshot = await getDocs(q);
-      const loadedPatients = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          updatedAt: data.updatedAt?.toDate() || new Date(),
-        } as Patient;
-      });
+      const { data, error } = await supabase
+        .from('patients')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const loadedPatients = (data || []).map(row => ({
+        id: row.id,
+        name: row.name,
+        age: row.age,
+        gender: row.gender,
+        history: row.history,
+        symptoms: row.symptoms,
+        tests: row.tests,
+        allergies: row.allergies,
+        possibleCondition: row.possible_condition,
+        recommendations: row.recommendations,
+        createdAt: new Date(row.created_at),
+        updatedAt: new Date(row.updated_at),
+      }));
+
       setPatients(loadedPatients);
     } catch (error) {
       console.error('Error loading patients:', error);
@@ -64,22 +64,40 @@ export function PatientProvider({ children }: { children: ReactNode }) {
 
   const addPatient = async (patientData: Omit<Patient, 'id' | 'createdAt' | 'updatedAt'>) => {
     try {
-      const newPatient = {
-        ...patientData,
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
+      const { data, error } = await supabase
+        .from('patients')
+        .insert([{
+          name: patientData.name,
+          age: patientData.age,
+          gender: patientData.gender,
+          history: patientData.history,
+          symptoms: patientData.symptoms,
+          tests: patientData.tests,
+          allergies: patientData.allergies,
+          possible_condition: patientData.possibleCondition,
+          recommendations: patientData.recommendations,
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const newPatient: Patient = {
+        id: data.id,
+        name: data.name,
+        age: data.age,
+        gender: data.gender,
+        history: data.history,
+        symptoms: data.symptoms,
+        tests: data.tests,
+        allergies: data.allergies,
+        possibleCondition: data.possible_condition,
+        recommendations: data.recommendations,
+        createdAt: new Date(data.created_at),
+        updatedAt: new Date(data.updated_at),
       };
-      
-      const docRef = await addDoc(collection(db, 'patients'), newPatient);
-      
-      const addedPatient: Patient = {
-        ...patientData,
-        id: docRef.id,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      
-      setPatients(prev => [addedPatient, ...prev]);
+
+      setPatients(prev => [newPatient, ...prev]);
     } catch (error) {
       console.error('Error adding patient:', error);
       throw error;
@@ -88,12 +106,23 @@ export function PatientProvider({ children }: { children: ReactNode }) {
 
   const updatePatient = async (id: string, updates: Partial<Patient>) => {
     try {
-      const patientRef = doc(db, 'patients', id);
-      await updateDoc(patientRef, {
-        ...updates,
-        updatedAt: Timestamp.now(),
-      });
-      
+      const { error } = await supabase
+        .from('patients')
+        .update({
+          name: updates.name,
+          age: updates.age,
+          gender: updates.gender,
+          history: updates.history,
+          symptoms: updates.symptoms,
+          tests: updates.tests,
+          allergies: updates.allergies,
+          possible_condition: updates.possibleCondition,
+          recommendations: updates.recommendations,
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
       setPatients(prev =>
         prev.map(p =>
           p.id === id ? { ...p, ...updates, updatedAt: new Date() } : p
@@ -107,7 +136,13 @@ export function PatientProvider({ children }: { children: ReactNode }) {
 
   const deletePatient = async (id: string) => {
     try {
-      await deleteDoc(doc(db, 'patients', id));
+      const { error } = await supabase
+        .from('patients')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
       setPatients(prev => prev.filter(p => p.id !== id));
     } catch (error) {
       console.error('Error deleting patient:', error);
