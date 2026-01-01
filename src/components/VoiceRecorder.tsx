@@ -2,7 +2,6 @@ import { useState, useRef } from 'react';
 import { Mic, Square, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { toast } from 'sonner';
-import { supabase } from '@/integrations/supabase/client';
 
 interface VoiceRecorderProps {
   onTranscription: (text: string) => void;
@@ -16,13 +15,39 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          channelCount: 1,
+          sampleRate: 48000,
+          echoCancellation: true,
+          noiseSuppression: true,
+        } 
+      });
+      
+      // Try different MIME types based on browser support
+      let mimeType = 'audio/webm';
+      const supportedTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+      ];
+      
+      for (const type of supportedTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          console.log('Using MIME type:', type);
+          break;
+        }
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
+          console.log('Audio chunk received:', event.data.size, 'bytes');
           audioChunksRef.current.push(event.data);
         }
       };
@@ -35,9 +60,9 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
         await processAudio();
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(1000); // Collect data every second
       setIsRecording(true);
-      toast.info('Recording started... Speak now');
+      toast.info('Recording started... Speak clearly');
     } catch (error) {
       console.error('Error starting recording:', error);
       toast.error('Microphone access denied');
@@ -55,39 +80,69 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
     setIsProcessing(true);
     
     try {
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      
-      // Convert to base64
-      const reader = new FileReader();
-      const base64Audio = await new Promise<string>((resolve, reject) => {
-        reader.onloadend = () => {
-          const base64 = (reader.result as string).split(',')[1];
-          resolve(base64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(audioBlob);
-      });
-
-      // Send to transcription edge function
-      const { data, error } = await supabase.functions.invoke('transcribe-audio', {
-        body: { audio: base64Audio }
-      });
-
-      if (error) {
-        throw error;
+      if (audioChunksRef.current.length === 0) {
+        throw new Error('No audio data recorded');
       }
 
-      if (data?.text) {
-        onTranscription(data.text);
-        toast.success('Voice note transcribed successfully');
-      } else if (data?.error) {
-        throw new Error(data.error);
+      // Get the MIME type from the first chunk
+      const mimeType = audioChunksRef.current[0].type;
+      const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+      
+      console.log('Processing audio:', audioBlob.size, 'bytes, type:', mimeType);
+      
+      // Check if audio is too short
+      if (audioBlob.size < 1000) {
+        throw new Error('Recording too short. Please speak for at least 2 seconds.');
+      }
+      
+      const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY;
+      if (!ELEVENLABS_API_KEY) {
+        throw new Error('ElevenLabs API key is not configured');
+      }
+
+      // Send original WebM directly - don't convert
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'audio.webm');
+      formData.append('model_id', 'scribe_v2');
+
+      console.log('Sending to ElevenLabs API...');
+
+      // Send directly to ElevenLabs API
+      const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+        method: 'POST',
+        headers: {
+          'xi-api-key': ELEVENLABS_API_KEY,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('ElevenLabs API error:', response.status, errorText);
+        throw new Error(`Transcription failed: ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('Full transcription response:', JSON.stringify(result, null, 2));
+      console.log('Text field:', result?.text);
+      console.log('Text length:', result?.text?.length);
+      
+      if (result?.text !== undefined && result.text !== null) {
+        const transcribedText = result.text.trim();
+        if (transcribedText) {
+          onTranscription(transcribedText);
+          toast.success(`Transcribed: "${transcribedText}"`);
+        } else {
+          toast.error('ElevenLabs could not detect speech - try speaking louder and closer to the mic');
+          console.error('Empty transcription returned - language_probability:', result.language_probability);
+        }
       } else {
-        throw new Error('No transcription returned');
+        console.error('No text field in response:', result);
+        throw new Error(`Unexpected API response: ${JSON.stringify(result)}`);
       }
     } catch (error) {
       console.error('Transcription error:', error);
-      toast.error('Failed to transcribe audio');
+      toast.error(error instanceof Error ? error.message : 'Failed to transcribe audio');
     } finally {
       setIsProcessing(false);
     }

@@ -5,12 +5,11 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { VoiceRecorder } from './VoiceRecorder';
+import { VoiceRecorder } from './VoiceRecorderWebSpeech';
 import { AIExtractionPanel } from './AIExtractionPanel';
 import { Patient, AIExtraction } from '@/types/patient';
 import { usePatients } from '@/contexts/PatientContext';
 import { toast } from 'sonner';
-import { supabase } from '@/integrations/supabase/client';
 
 interface PatientFormProps {
   patientId?: string;
@@ -60,43 +59,78 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
     setIsExtracting(true);
     
     try {
-      const { data, error } = await supabase.functions.invoke('extract-patient-data', {
-        body: { transcription: text }
+      const GOOGLE_GEMINI_API_KEY = import.meta.env.VITE_GOOGLE_GEMINI_API_KEY;
+      if (!GOOGLE_GEMINI_API_KEY) {
+        throw new Error('Google Gemini API key is not configured');
+      }
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GOOGLE_GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `You are a medical data extraction assistant. Extract structured patient information from this clinical note and respond with valid JSON only (no markdown, no code blocks):\n\n${text}\n\nExtract these exact fields:\n- age (string number only, e.g., "54")\n- history (string)\n- symptoms (string)\n- tests (string)\n- allergies (string)\n- possibleCondition (string)\n- recommendations (string)`
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.2,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 1024,
+          }
+        }),
       });
 
-      if (error) {
-        throw error;
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Gemini API error:', response.status, errorText);
+        throw new Error(`AI extraction failed: ${response.status}`);
       }
 
-      if (data?.extraction) {
-        const extraction: AIExtraction = {
-          age: parseInt(data.extraction.age) || undefined,
-          history: data.extraction.history,
-          symptoms: data.extraction.symptoms,
-          tests: data.extraction.tests,
-          allergies: data.extraction.allergies,
-          possibleCondition: data.extraction.possibleCondition,
-          recommendations: data.extraction.recommendations,
-        };
-        
-        setAiExtraction(extraction);
+      const data = await response.json();
+      console.log('Gemini response:', data);
 
-        // Auto-fill form with extracted data
-        setFormData(prev => ({
-          ...prev,
-          age: extraction.age?.toString() || prev.age,
-          history: extraction.history || prev.history,
-          symptoms: extraction.symptoms || prev.symptoms,
-          tests: extraction.tests || prev.tests,
-          allergies: extraction.allergies || prev.allergies,
-          possibleCondition: extraction.possibleCondition || prev.possibleCondition,
-          recommendations: extraction.recommendations || prev.recommendations,
-        }));
-        
-        toast.success('AI extraction complete');
-      } else if (data?.error) {
-        throw new Error(data.error);
+      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!responseText) {
+        throw new Error('Invalid AI response format');
       }
+
+      // Parse JSON from response (remove markdown if present)
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('No valid data found in AI response');
+      }
+
+      const extractedData = JSON.parse(jsonMatch[0]);
+      
+      const extraction: AIExtraction = {
+        age: parseInt(extractedData.age) || undefined,
+        history: extractedData.history,
+        symptoms: extractedData.symptoms,
+        tests: extractedData.tests,
+        allergies: extractedData.allergies,
+        possibleCondition: extractedData.possibleCondition,
+        recommendations: extractedData.recommendations,
+      };
+      
+      setAiExtraction(extraction);
+
+      // Auto-fill form with extracted data
+      setFormData(prev => ({
+        ...prev,
+        age: extraction.age?.toString() || prev.age,
+        history: extraction.history || prev.history,
+        symptoms: extraction.symptoms || prev.symptoms,
+        tests: extraction.tests || prev.tests,
+        allergies: extraction.allergies || prev.allergies,
+        possibleCondition: extraction.possibleCondition || prev.possibleCondition,
+        recommendations: extraction.recommendations || prev.recommendations,
+      }));
+      
+      toast.success('AI extraction complete');
     } catch (error) {
       console.error('AI extraction error:', error);
       toast.error('Failed to extract patient data');

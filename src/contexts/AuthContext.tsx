@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { auth, googleProvider } from '@/integrations/firebase/client';
 
 interface User {
   id: string;
@@ -10,8 +12,8 @@ interface User {
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: () => void;
-  logout: () => void;
+  login: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -19,17 +21,36 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
-  const login = () => {
-    // Mock login - in production, integrate with real auth
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser) {
+        setUser({
+          id: fbUser.uid,
+          name: fbUser.displayName ?? fbUser.email ?? 'User',
+          email: fbUser.email ?? '',
+          avatar: fbUser.photoURL ?? undefined,
+        });
+      } else {
+        setUser(null);
+      }
+    });
+
+    return unsubscribe;
+  }, []);
+
+  const login = async () => {
+    const result = await signInWithPopup(auth, googleProvider);
+    const fbUser = result.user;
     setUser({
-      id: '1',
-      name: 'Dr. Sarah Johnson',
-      email: 'sarah.johnson@medhelp.com',
-      avatar: undefined,
+      id: fbUser.uid,
+      name: fbUser.displayName ?? fbUser.email ?? 'User',
+      email: fbUser.email ?? '',
+      avatar: fbUser.photoURL ?? undefined,
     });
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await signOut(auth);
     setUser(null);
   };
 

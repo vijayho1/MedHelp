@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
+import { toast } from 'sonner';
 
 export default function Login() {
   const { login, isAuthenticated } = useAuth();
@@ -14,9 +15,14 @@ export default function Login() {
     }
   }, [isAuthenticated, navigate]);
 
-  const handleLogin = () => {
-    login();
-    navigate('/dashboard');
+  const handleLogin = async () => {
+    try {
+      await login();
+      navigate('/dashboard');
+    } catch (error) {
+      console.error('Google sign-in failed:', error);
+      toast.error('Google sign-in failed. Please try again.');
+    }
   };
 
   return (
