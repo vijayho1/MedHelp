@@ -158,17 +158,21 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
       recommendations: formData.recommendations,
     };
 
-    setTimeout(() => {
+    try {
       if (patientId) {
-        updatePatient(patientId, patientData);
+        await updatePatient(patientId, patientData);
         toast.success('Patient record updated');
       } else {
-        addPatient(patientData);
+        await addPatient(patientData);
         toast.success('Patient added successfully');
       }
-      setIsSubmitting(false);
       onBack();
-    }, 500);
+    } catch (error) {
+      console.error('Error saving patient:', error);
+      toast.error('Failed to save patient');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (

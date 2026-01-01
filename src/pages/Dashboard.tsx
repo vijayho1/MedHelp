@@ -27,7 +27,7 @@ type View = 'list' | 'form';
 export default function Dashboard() {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const { patients, searchPatients, deletePatient } = usePatients();
+  const { patients, searchPatients, deletePatient, loading } = usePatients();
   const [view, setView] = useState<View>('list');
   const [editingPatientId, setEditingPatientId] = useState<string | undefined>();
   const [searchQuery, setSearchQuery] = useState('');
@@ -57,10 +57,14 @@ export default function Dashboard() {
     setDeleteDialogOpen(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (patientToDelete) {
-      deletePatient(patientToDelete);
-      toast.success('Patient record deleted');
+      try {
+        await deletePatient(patientToDelete);
+        toast.success('Patient record deleted');
+      } catch (error) {
+        toast.error('Failed to delete patient');
+      }
     }
     setDeleteDialogOpen(false);
     setPatientToDelete(null);
@@ -106,7 +110,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {patients.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-12 text-muted-foreground">
+            Loading patients...
+          </div>
+        ) : patients.length === 0 ? (
           <EmptyState />
         ) : filteredPatients.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
