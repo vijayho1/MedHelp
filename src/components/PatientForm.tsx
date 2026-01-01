@@ -59,46 +59,43 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
     setIsExtracting(true);
     
     try {
-      const GOOGLE_GEMINI_API_KEY = import.meta.env.VITE_GOOGLE_GEMINI_API_KEY;
-      if (!GOOGLE_GEMINI_API_KEY) {
-        throw new Error('Google Gemini API key is not configured');
+      const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+      if (!GROQ_API_KEY) {
+        throw new Error('Groq API key is not configured');
       }
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GOOGLE_GEMINI_API_KEY}`, {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `You are a medical data extraction assistant. Extract structured patient information from this clinical note and respond with valid JSON only (no markdown, no code blocks):\n\n${text}\n\nExtract these exact fields:\n- age (string number only, e.g., "54")\n- history (string)\n- symptoms (string)\n- tests (string)\n- allergies (string)\n- possibleCondition (string)\n- recommendations (string)`
-            }]
+          model: 'llama-3.3-70b-versatile',
+          messages: [{
+            role: 'user',
+            content: `Extract patient information from this clinical note and respond with ONLY valid JSON (no markdown, no code blocks):\n\n${text}\n\nExtract these exact fields:\n- age (string number only, e.g., "54")\n- history (string)\n- symptoms (string)\n- tests (string)\n- allergies (string)\n- possibleCondition (string)\n- recommendations (string)`
           }],
-          generationConfig: {
-            temperature: 0.2,
-            topK: 40,
-            topP: 0.95,
-            maxOutputTokens: 1024,
-          }
+          temperature: 0.2,
+          max_tokens: 1024,
         }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Gemini API error:', response.status, errorText);
+        console.error('Groq API error:', response.status, errorText);
         throw new Error(`AI extraction failed: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('Gemini response:', data);
+      console.log('Groq response:', data);
 
-      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const responseText = data.choices?.[0]?.message?.content;
       if (!responseText) {
         throw new Error('Invalid AI response format');
       }
 
-      // Parse JSON from response (remove markdown if present)
+      // Parse JSON from response
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error('No valid data found in AI response');
