@@ -10,6 +10,7 @@ import { AIExtractionPanel } from './AIExtractionPanel';
 import { Patient, AIExtraction } from '@/types/patient';
 import { usePatients } from '@/contexts/PatientContext';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
 interface PatientFormProps {
   patientId?: string;
@@ -54,36 +55,54 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
     }
   }, [patientId, getPatient]);
 
-  const handleTranscription = (text: string) => {
+  const handleTranscription = async (text: string) => {
     setTranscription(text);
-    
-    // Simulate AI extraction
     setIsExtracting(true);
-    setTimeout(() => {
-      const extraction: AIExtraction = {
-        age: 54,
-        history: 'Diabetes',
-        symptoms: 'Chest pain for two days',
-        tests: 'BP 140/90',
-        allergies: 'None known',
-        possibleCondition: 'Angina',
-        recommendations: 'Order ECG, Refer to cardiologist',
-      };
-      setAiExtraction(extraction);
-      setIsExtracting(false);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('extract-patient-data', {
+        body: { transcription: text }
+      });
 
-      // Auto-fill form with extracted data
-      setFormData(prev => ({
-        ...prev,
-        age: extraction.age?.toString() || prev.age,
-        history: extraction.history || prev.history,
-        symptoms: extraction.symptoms || prev.symptoms,
-        tests: extraction.tests || prev.tests,
-        allergies: extraction.allergies || prev.allergies,
-        possibleCondition: extraction.possibleCondition || prev.possibleCondition,
-        recommendations: extraction.recommendations || prev.recommendations,
-      }));
-    }, 2000);
+      if (error) {
+        throw error;
+      }
+
+      if (data?.extraction) {
+        const extraction: AIExtraction = {
+          age: parseInt(data.extraction.age) || undefined,
+          history: data.extraction.history,
+          symptoms: data.extraction.symptoms,
+          tests: data.extraction.tests,
+          allergies: data.extraction.allergies,
+          possibleCondition: data.extraction.possibleCondition,
+          recommendations: data.extraction.recommendations,
+        };
+        
+        setAiExtraction(extraction);
+
+        // Auto-fill form with extracted data
+        setFormData(prev => ({
+          ...prev,
+          age: extraction.age?.toString() || prev.age,
+          history: extraction.history || prev.history,
+          symptoms: extraction.symptoms || prev.symptoms,
+          tests: extraction.tests || prev.tests,
+          allergies: extraction.allergies || prev.allergies,
+          possibleCondition: extraction.possibleCondition || prev.possibleCondition,
+          recommendations: extraction.recommendations || prev.recommendations,
+        }));
+        
+        toast.success('AI extraction complete');
+      } else if (data?.error) {
+        throw new Error(data.error);
+      }
+    } catch (error) {
+      console.error('AI extraction error:', error);
+      toast.error('Failed to extract patient data');
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
