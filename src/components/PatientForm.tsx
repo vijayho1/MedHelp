@@ -60,7 +60,7 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
 
     // Helper to process and set extraction
     const processExtraction = (extractedData: any) => {
-      const extraction: AIExtraction = {
+      const extraction: AIExtraction & { gender?: string } = {
         age: parseInt(extractedData.age) || undefined,
         history: extractedData.history,
         symptoms: extractedData.symptoms,
@@ -68,11 +68,15 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
         allergies: extractedData.allergies,
         possibleCondition: extractedData.possibleCondition,
         recommendations: extractedData.recommendations,
+        gender: extractedData.gender,
       };
       setAiExtraction(extraction);
       setFormData(prev => ({
         ...prev,
         age: extraction.age?.toString() || prev.age,
+        gender: extraction.gender && ['male','female','other'].includes(extraction.gender.toLowerCase())
+          ? extraction.gender.toLowerCase() as 'male' | 'female' | 'other'
+          : prev.gender,
         history: extraction.history || prev.history,
         symptoms: extraction.symptoms || prev.symptoms,
         tests: extraction.tests || prev.tests,
@@ -83,85 +87,98 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
     };
 
     try {
-      // Try Groq first
-      const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
-      if (!GROQ_API_KEY) throw new Error('Groq API key is not configured');
-      let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [{
-            role: 'user',
-            content: `Extract patient information from this clinical note and respond with ONLY valid JSON (no markdown, no code blocks):\n\n${text}\n\nExtract these exact fields:\n- age (string number only, e.g., "54")\n- history (string)\n- symptoms (string)\n- tests (string)\n- allergies (string)\n- possibleCondition (string)\n- recommendations (string)`
-          }],
-          temperature: 0.2,
-          max_tokens: 1024,
-        }),
-      });
+      const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY;
+      if (!OPENROUTER_API_KEY) throw new Error('OpenRouter API key is not configured');
+          let response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'xiaomi/mimo-v2-flash:free', // Xiaomi: MiMo-V2-Flash (free)
+              messages: [{
+                role: 'user',
+                content: `You are a medical data extraction assistant. Given the following clinical note, extract ONLY the relevant patient information and ignore any irrelevant, accidental, or unrelated text (such as repeated words, filler, or speech recognition errors). Respond with ONLY valid JSON (no markdown, no code blocks).\n\nClinical note:\n${text}\n\nExtract and clean these exact fields:\n- age (string number only, e.g., "54")\n- history (string)\n- symptoms (string)\n- tests (string)\n- allergies (string)\n- possibleCondition (string)\n- recommendations (string)\n\nIf you are unsure about a field, leave it as an empty string. Do not include any extra commentary or explanation.`
+              }],
+              temperature: 0.2,
+              max_tokens: 1024,
+            }),
+          });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Groq API error:', response.status, errorText);
-        throw new Error(`AI extraction failed: ${response.status}`);
+        console.error('OpenRouter API error:', response.status, errorText);
+        throw new Error(`OpenRouter extraction failed: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('Groq response:', data);
+      console.log('OpenRouter FULL response:', data);
       const responseText = data.choices?.[0]?.message?.content;
-      if (!responseText) throw new Error('Invalid AI response format');
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No valid data found in AI response');
-      const extractedData = JSON.parse(jsonMatch[0]);
-      processExtraction(extractedData);
-      toast.success('AI extraction complete (Groq)');
-    } catch (groqError) {
-      console.error('Groq extraction failed, trying Gemini...', groqError);
-      // Try Gemini fallback
-      try {
-        const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!GEMINI_API_KEY) throw new Error('Gemini API key is not configured');
-        const geminiResponse = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{
-                parts: [{
-                  text: `You are a medical data extraction assistant. Extract structured patient information from this clinical note and respond with valid JSON only (no markdown):\n\n${text}\n\nExtract the following fields:\n- age (string, e.g., "54")\n- history (string)\n- symptoms (string)\n- tests (string)\n- allergies (string)\n- possibleCondition (string)\n- recommendations (string)`
-                }]
-              }],
-              generationConfig: {
-                temperature: 0.2,
-                topK: 40,
-                topP: 0.95,
-                maxOutputTokens: 1024,
-              }
-            }),
-          }
-        );
-        if (!geminiResponse.ok) {
-          const errorText = await geminiResponse.text();
-          console.error('Gemini API error:', geminiResponse.status, errorText);
-          throw new Error(`Gemini extraction failed: ${geminiResponse.status}`);
-        }
-        const geminiData = await geminiResponse.json();
-        console.log('Gemini response:', geminiData);
-        const textOut = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!textOut) throw new Error('Invalid Gemini response format');
-        const jsonMatch = textOut.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error('No JSON found in Gemini response');
-        const extractedData = JSON.parse(jsonMatch[0]);
-        processExtraction(extractedData);
-        toast.success('AI extraction complete (Gemini)');
-      } catch (geminiError) {
-        console.error('AI extraction error (Gemini fallback):', geminiError);
-        toast.error('Failed to extract patient data from both Groq and Gemini');
+      if (!responseText) {
+        // Show the full response in the UI for debugging
+        toast.error('No AI output found. See console for full response.');
+        // Clear the form if extraction fails
+        setAiExtraction(null);
+        setFormData({
+          name: '',
+          age: '',
+          gender: '',
+          history: '',
+          symptoms: '',
+          tests: '',
+          allergies: '',
+          possibleCondition: '',
+          recommendations: '',
+        });
+        return;
       }
+      let extractedData = null;
+      let jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        // Show the raw output in a toast for user visibility
+        toast.error('AI output was not valid JSON. Raw output shown in console.');
+        console.error('Raw AI output:', responseText);
+        // Clear the form if extraction fails
+        setAiExtraction(null);
+        setFormData({
+          name: '',
+          age: '',
+          gender: '',
+          history: '',
+          symptoms: '',
+          tests: '',
+          allergies: '',
+          possibleCondition: '',
+          recommendations: '',
+        });
+        return;
+      }
+      try {
+        extractedData = JSON.parse(jsonMatch[0]);
+      } catch (err) {
+        toast.error('Failed to parse AI output as JSON. See console for details.');
+        console.error('JSON parse error:', err, 'Raw output:', responseText);
+        // Clear the form if extraction fails
+        setAiExtraction(null);
+        setFormData({
+          name: '',
+          age: '',
+          gender: '',
+          history: '',
+          symptoms: '',
+          tests: '',
+          allergies: '',
+          possibleCondition: '',
+          recommendations: '',
+        });
+        return;
+      }
+      processExtraction(extractedData);
+      toast.success('AI extraction complete (OpenRouter)');
+    } catch (error) {
+      console.error('AI extraction error (OpenRouter):', error);
+      toast.error('Failed to extract patient data from OpenRouter');
     } finally {
       setIsExtracting(false);
     }
