@@ -27,10 +27,12 @@ type View = 'list' | 'form';
 export default function Dashboard() {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const { patients, searchPatients, deletePatient, loading } = usePatients();
+  const { patients, searchPatients, deletePatient, loading, generateRandomPatientsWithAI } = usePatients();
+  const [isSeeding, setIsSeeding] = useState(false);
   const [view, setView] = useState<View>('list');
   const [editingPatientId, setEditingPatientId] = useState<string | undefined>();
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateStringFilter, setDateStringFilter] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [patientToDelete, setPatientToDelete] = useState<string | null>(null);
 
@@ -40,7 +42,24 @@ export default function Dashboard() {
     }
   }, [isAuthenticated, navigate]);
 
-  const filteredPatients = searchPatients(searchQuery);
+  // Filter patients by search and dd/mm/yy string
+  let filteredPatients = searchPatients(searchQuery);
+  if (dateStringFilter) {
+    filteredPatients = filteredPatients.filter(p => {
+      const d = new Date(p.createdAt);
+      const dd = d.getDate().toString().padStart(2, '0');
+      const mm = (d.getMonth() + 1).toString().padStart(2, '0');
+      const yyyy = d.getFullYear().toString();
+      const yy = yyyy.slice(-2);
+      // Accept both dd/mm/yy and dd/mm/yyyy
+      const dateStrShort = `${dd}/${mm}/${yy}`;
+      const dateStrLong = `${dd}/${mm}/${yyyy}`;
+      return (
+        dateStrShort === dateStringFilter.trim() ||
+        dateStrLong === dateStringFilter.trim()
+      );
+    });
+  }
 
   const handleNewPatient = () => {
     setEditingPatientId(undefined);
@@ -98,7 +117,17 @@ export default function Dashboard() {
           </Button>
         </div>
 
-        <div className="mb-6">
+        <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:gap-6">
+          {import.meta.env.DEV && (
+            <Button onClick={async () => {
+              setIsSeeding(true);
+              await generateRandomPatientsWithAI();
+              setIsSeeding(false);
+              toast.success('Random patients generated!');
+            }} disabled={isSeeding} variant="outline" className="mb-2 md:mb-0">
+              {isSeeding ? 'Generating...' : 'Generate Random Patients'}
+            </Button>
+          )}
           <div className="relative max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -106,6 +135,16 @@ export default function Dashboard() {
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="pl-10"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1" htmlFor="date-string-filter">Date (dd/mm/yy)</label>
+            <Input
+              id="date-string-filter"
+              placeholder="e.g. 12/01/26"
+              value={dateStringFilter}
+              onChange={e => setDateStringFilter(e.target.value)}
+              className="w-32"
             />
           </div>
         </div>
