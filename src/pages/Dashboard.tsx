@@ -138,10 +138,9 @@ export default function Dashboard() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium mb-1" htmlFor="date-string-filter">Date (dd/mm/yy)</label>
             <Input
               id="date-string-filter"
-              placeholder="e.g. 12/01/26"
+              placeholder="dd/mm/yy"
               value={dateStringFilter}
               onChange={e => setDateStringFilter(e.target.value)}
               className="w-32"
