@@ -57,14 +57,36 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
   const handleTranscription = async (text: string) => {
     setTranscription(text);
     setIsExtracting(true);
-    
-    try {
-      const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
-      if (!GROQ_API_KEY) {
-        throw new Error('Groq API key is not configured');
-      }
 
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Helper to process and set extraction
+    const processExtraction = (extractedData: any) => {
+      const extraction: AIExtraction = {
+        age: parseInt(extractedData.age) || undefined,
+        history: extractedData.history,
+        symptoms: extractedData.symptoms,
+        tests: extractedData.tests,
+        allergies: extractedData.allergies,
+        possibleCondition: extractedData.possibleCondition,
+        recommendations: extractedData.recommendations,
+      };
+      setAiExtraction(extraction);
+      setFormData(prev => ({
+        ...prev,
+        age: extraction.age?.toString() || prev.age,
+        history: extraction.history || prev.history,
+        symptoms: extraction.symptoms || prev.symptoms,
+        tests: extraction.tests || prev.tests,
+        allergies: extraction.allergies || prev.allergies,
+        possibleCondition: extraction.possibleCondition || prev.possibleCondition,
+        recommendations: extraction.recommendations || prev.recommendations,
+      }));
+    };
+
+    try {
+      // Try Groq first
+      const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+      if (!GROQ_API_KEY) throw new Error('Groq API key is not configured');
+      let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${GROQ_API_KEY}`,
@@ -89,48 +111,57 @@ export function PatientForm({ patientId, onBack }: PatientFormProps) {
 
       const data = await response.json();
       console.log('Groq response:', data);
-
       const responseText = data.choices?.[0]?.message?.content;
-      if (!responseText) {
-        throw new Error('Invalid AI response format');
-      }
-
-      // Parse JSON from response
+      if (!responseText) throw new Error('Invalid AI response format');
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No valid data found in AI response');
-      }
-
+      if (!jsonMatch) throw new Error('No valid data found in AI response');
       const extractedData = JSON.parse(jsonMatch[0]);
-      
-      const extraction: AIExtraction = {
-        age: parseInt(extractedData.age) || undefined,
-        history: extractedData.history,
-        symptoms: extractedData.symptoms,
-        tests: extractedData.tests,
-        allergies: extractedData.allergies,
-        possibleCondition: extractedData.possibleCondition,
-        recommendations: extractedData.recommendations,
-      };
-      
-      setAiExtraction(extraction);
-
-      // Auto-fill form with extracted data
-      setFormData(prev => ({
-        ...prev,
-        age: extraction.age?.toString() || prev.age,
-        history: extraction.history || prev.history,
-        symptoms: extraction.symptoms || prev.symptoms,
-        tests: extraction.tests || prev.tests,
-        allergies: extraction.allergies || prev.allergies,
-        possibleCondition: extraction.possibleCondition || prev.possibleCondition,
-        recommendations: extraction.recommendations || prev.recommendations,
-      }));
-      
-      toast.success('AI extraction complete');
-    } catch (error) {
-      console.error('AI extraction error:', error);
-      toast.error('Failed to extract patient data');
+      processExtraction(extractedData);
+      toast.success('AI extraction complete (Groq)');
+    } catch (groqError) {
+      console.error('Groq extraction failed, trying Gemini...', groqError);
+      // Try Gemini fallback
+      try {
+        const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+        if (!GEMINI_API_KEY) throw new Error('Gemini API key is not configured');
+        const geminiResponse = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [{
+                  text: `You are a medical data extraction assistant. Extract structured patient information from this clinical note and respond with valid JSON only (no markdown):\n\n${text}\n\nExtract the following fields:\n- age (string, e.g., "54")\n- history (string)\n- symptoms (string)\n- tests (string)\n- allergies (string)\n- possibleCondition (string)\n- recommendations (string)`
+                }]
+              }],
+              generationConfig: {
+                temperature: 0.2,
+                topK: 40,
+                topP: 0.95,
+                maxOutputTokens: 1024,
+              }
+            }),
+          }
+        );
+        if (!geminiResponse.ok) {
+          const errorText = await geminiResponse.text();
+          console.error('Gemini API error:', geminiResponse.status, errorText);
+          throw new Error(`Gemini extraction failed: ${geminiResponse.status}`);
+        }
+        const geminiData = await geminiResponse.json();
+        console.log('Gemini response:', geminiData);
+        const textOut = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!textOut) throw new Error('Invalid Gemini response format');
+        const jsonMatch = textOut.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON found in Gemini response');
+        const extractedData = JSON.parse(jsonMatch[0]);
+        processExtraction(extractedData);
+        toast.success('AI extraction complete (Gemini)');
+      } catch (geminiError) {
+        console.error('AI extraction error (Gemini fallback):', geminiError);
+        toast.error('Failed to extract patient data from both Groq and Gemini');
+      }
     } finally {
       setIsExtracting(false);
     }
