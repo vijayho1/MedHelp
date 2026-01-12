@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Mic, Square, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { toast } from 'sonner';
@@ -12,6 +12,13 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const recognitionRef = useRef<any>(null);
   const finalTranscriptRef = useRef<string>('');
+  const onTranscriptionRef = useRef(onTranscription);
+  const hasProcessedRef = useRef(false);
+
+  // Keep the callback ref updated
+  useEffect(() => {
+    onTranscriptionRef.current = onTranscription;
+  }, [onTranscription]);
 
   useEffect(() => {
     // Check if browser supports Web Speech API
@@ -30,18 +37,16 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
     recognition.onstart = () => {
       console.log('Speech recognition started');
       finalTranscriptRef.current = '';
+      hasProcessedRef.current = false;
     };
 
     recognition.onresult = (event: any) => {
-      let interimTranscript = '';
       let finalTranscript = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
           finalTranscript += transcript + ' ';
-        } else {
-          interimTranscript += transcript;
         }
       }
 
@@ -57,7 +62,7 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
         toast.error('No speech detected. Please try again.');
       } else if (event.error === 'audio-capture') {
         toast.error('Microphone error. Please check your microphone.');
-      } else {
+      } else if (event.error !== 'aborted') {
         toast.error(`Speech recognition error: ${event.error}`);
       }
       setIsRecording(false);
@@ -66,12 +71,21 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
 
     recognition.onend = () => {
       console.log('Speech recognition ended');
+      
+      // Prevent duplicate processing
+      if (hasProcessedRef.current) {
+        setIsRecording(false);
+        setIsProcessing(false);
+        return;
+      }
+      hasProcessedRef.current = true;
+      
       const transcript = finalTranscriptRef.current.trim();
       
       if (transcript) {
         console.log('Sending transcript:', transcript);
-        onTranscription(transcript);
-        toast.success(`Transcribed: "${transcript}"`);
+        onTranscriptionRef.current(transcript);
+        toast.success('Transcription complete!');
       } else {
         toast.error('No speech detected. Please speak clearly into the microphone.');
       }
@@ -84,10 +98,12 @@ export function VoiceRecorder({ onTranscription }: VoiceRecorderProps) {
 
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try {
+          recognitionRef.current.abort();
+        } catch (e) {}
       }
     };
-  }, [onTranscription]);
+  }, []);
 
   const startRecording = () => {
     if (!recognitionRef.current) {
